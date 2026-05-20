@@ -19,7 +19,6 @@ jobs:
         run: |
           set +e
 
-          # 计算72小时后的时间（ISO 8601格式）
           EXPIRE_TIME=$(date -u -d '+72 hours' '+%Y-%m-%dT%H:%M:%SZ')
           echo "设置 sleep 时间为: ${EXPIRE_TIME}"
 
@@ -27,8 +26,7 @@ jobs:
             -X PATCH \
             -H "Authorization: Bearer ${AIR_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            -H "x-ngc-org-name: ${NGC_ORG}" \
-            "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
+            "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/?org=${NGC_ORG}" \
             -d "{\"sleep_at\": \"${EXPIRE_TIME}\"}")
 
           BODY=$(cat /tmp/air_response.json)
