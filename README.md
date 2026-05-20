@@ -1,3 +1,5 @@
+这是一个通过调用 NVIDIA Air API 给指定拓扑续期的项目
+
 需要配置的 4 个 Secrets
 进入仓库 Settings → Secrets and variables → Actions → New repository secret，依次添加：
 
