@@ -17,39 +17,51 @@ jobs:
           TOPOLOGY_ID: ${{ secrets.AIR_TOPOLOGY_ID }}
           NGC_ORG: ${{ secrets.NGC_ORG_NAME }}
         run: |
-          set +e
+          pip install air-sdk --quiet
 
-          # 调试：确认变量是否注入（只显示长度，不暴露内容）
-          echo "AIR_API_TOKEN 长度: ${#AIR_API_TOKEN}"
-          echo "TOPOLOGY_ID 长度: ${#TOPOLOGY_ID}"
-          echo "NGC_ORG 长度: ${#NGC_ORG}"
-          echo "NGC_ORG 值: [${NGC_ORG}]"
+          python3 << 'PYEOF'
+          import os
+          import sys
+          from datetime import datetime, timezone, timedelta
+          from air_sdk import AirApi
 
-          EXPIRE_TIME=$(date -u -d '+72 hours' '+%Y-%m-%dT%H:%M:%SZ')
-          echo "设置 sleep 时间为: ${EXPIRE_TIME}"
+          api_key    = os.environ["AIR_API_TOKEN"]
+          sim_id     = os.environ["TOPOLOGY_ID"]
+          org        = os.environ["NGC_ORG"]
+          expire     = datetime.now(timezone.utc) + timedelta(hours=72)
 
-          FULL_URL="https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/?org=${NGC_ORG}"
-          echo "请求 URL: ${FULL_URL}"
+          try:
+              api = AirApi.with_api_key(api_key=api_key, org_name=org)
+              sim = api.simulations.get(sim_id)
+              sim.set_sleep_time(expire)
+              print(f"SUCCESS expire_time={expire.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+              print(f"topology_id={sim_id}")
+          except Exception as e:
+              print(f"FAILED {e}", file=sys.stderr)
+              sys.exit(1)
+          PYEOF
 
-          HTTP_CODE=$(curl -s -o /tmp/air_response.json -w "%{http_code}" \
-            -X PATCH \
-            -H "Authorization: Bearer ${AIR_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "${FULL_URL}" \
-            -d "{\"sleep_at\": \"${EXPIRE_TIME}\"}")
+          # 提取输出写入 GitHub Output
+          OUTPUT=$(python3 -c "
+          import os, sys
+          from datetime import datetime, timezone, timedelta
+          from air_sdk import AirApi
+          api_key = os.environ['AIR_API_TOKEN']
+          sim_id  = os.environ['TOPOLOGY_ID']
+          org     = os.environ['NGC_ORG']
+          expire  = datetime.now(timezone.utc) + timedelta(hours=72)
+          api = AirApi.with_api_key(api_key=api_key, org_name=org)
+          sim = api.simulations.get(sim_id)
+          sim.set_sleep_time(expire)
+          print(expire.strftime('%Y-%m-%dT%H:%M:%SZ'))
+          " 2>/dev/null)
 
-          BODY=$(cat /tmp/air_response.json)
-          echo "HTTP 状态码: ${HTTP_CODE}"
-          echo "响应: ${BODY}"
-
-          echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
-          echo "expire_time=${EXPIRE_TIME}" >> "$GITHUB_OUTPUT"
-          echo "topology_id=${TOPOLOGY_ID}" >> "$GITHUB_OUTPUT"
-
-          if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
-            echo "status=success" >> "$GITHUB_OUTPUT"
+          if [ $? -eq 0 ]; then
+            echo "expire_time=${OUTPUT}" >> "$GITHUB_OUTPUT"
+            echo "topology_id=${TOPOLOGY_ID}" >> "$GITHUB_OUTPUT"
+            echo "续期成功，sleep 时间延长至: ${OUTPUT}"
           else
-            echo "status=failure" >> "$GITHUB_OUTPUT"
+            echo "续期失败"
             exit 1
           fi
 
@@ -75,12 +87,11 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TOPOLOGY_ID: ${{ secrets.AIR_TOPOLOGY_ID }}
-          HTTP_CODE: ${{ steps.renew.outputs.http_code }}
           RUN_ID: ${{ github.run_id }}
           REPO: ${{ github.repository }}
         run: |
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
-          TEXT="❌ NVIDIA Air 续期失败%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A📛 HTTP 状态码: ${HTTP_CODE}%0A🔗 日志: ${RUN_URL}%0A%0A⚠️ 请尽快手动续期，否则拓扑将进入 sleep 状态！"
+          TEXT="❌ NVIDIA Air 续期失败%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A🔗 日志: ${RUN_URL}%0A%0A⚠️ 请尽快手动续期，否则拓扑将进入 sleep 状态！"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}&text=${TEXT}"
