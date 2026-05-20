@@ -1,0 +1,96 @@
+name: NVIDIA Air Auto Renew
+
+on:
+  schedule:
+    - cron: '0 */12 * * *'   # 每12小时续期一次，远低于72小时上限
+  workflow_dispatch:           # 允许手动触发
+
+jobs:
+  renew-topology:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Renew NVIDIA Air Topology
+        id: renew
+        env:
+          AIR_API_TOKEN: ${{ secrets.AIR_API_TOKEN }}
+          TOPOLOGY_ID:   ${{ secrets.AIR_TOPOLOGY_ID }}
+        run: |
+          set +e   # 不因 curl 失败直接退出，交由后续判断
+
+          HTTP_CODE=$(curl -s -o /tmp/air_response.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${AIR_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://air.cgi.com/api/v1/simulation/${TOPOLOGY_ID}/control/" \
+            -d '{"action": "renew"}')
+
+          BODY=$(cat /tmp/air_response.json)
+          echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+          echo "body=${BODY}"           >> "$GITHUB_OUTPUT"
+          echo "topology_id=${TOPOLOGY_ID}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+      # ── 成功通知 ──────────────────────────────────────────────
+      - name: Telegram — 续期成功
+        if: success()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+        run: |
+          TOPOLOGY_ID="${{ steps.renew.outputs.topology_id }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          MESSAGE=$(printf \
+            "✅ *NVIDIA Air 续期成功*\n\n\
+🖥 拓扑 ID：\`%s\`\n\
+🕐 时间：%s\n\
+⏱ 有效期延长至 72 小时后\n\
+🔗 [查看 Actions 日志](%s)" \
+            "$TOPOLOGY_ID" "$NOW" "$RUN_URL")
+
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"chat_id\":    \"${TG_CHAT_ID}\",
+              \"text\":       \"${MESSAGE}\",
+              \"parse_mode\": \"Markdown\"
+            }"
+
+      # ── 失败通知 ──────────────────────────────────────────────
+      - name: Telegram — 续期失败
+        if: failure()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID:   ${{ secrets.TG_CHAT_ID }}
+        run: |
+          TOPOLOGY_ID="${{ secrets.AIR_TOPOLOGY_ID }}"
+          HTTP_CODE="${{ steps.renew.outputs.http_code }}"
+          BODY="${{ steps.renew.outputs.body }}"
+          RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          MESSAGE=$(printf \
+            "❌ *NVIDIA Air 续期失败*\n\n\
+🖥 拓扑 ID：\`%s\`\n\
+🕐 时间：%s\n\
+📛 HTTP 状态码：%s\n\
+📄 响应：\`%s\`\n\
+🔗 [查看 Actions 日志](%s)\n\n\
+⚠️ 请尽快手动续期，否则拓扑将进入 sleep 状态！" \
+            "$TOPOLOGY_ID" "$NOW" "$HTTP_CODE" "$BODY" "$RUN_URL")
+
+          curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"chat_id\":    \"${TG_CHAT_ID}\",
+              \"text\":       \"${MESSAGE}\",
+              \"parse_mode\": \"Markdown\"
+            }"
