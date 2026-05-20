@@ -2,8 +2,8 @@ name: NVIDIA Air Auto Renew
 
 on:
   schedule:
-    - cron: '0 */12 * * *'   # 每12小时续期一次，远低于72小时上限
-  workflow_dispatch:           # 允许手动触发
+    - cron: '0 */12 * * *'
+  workflow_dispatch:
 
 jobs:
   renew-topology:
@@ -19,14 +19,23 @@ jobs:
         run: |
           set +e
 
+          # 调试：确认变量是否注入（只显示长度，不暴露内容）
+          echo "AIR_API_TOKEN 长度: ${#AIR_API_TOKEN}"
+          echo "TOPOLOGY_ID 长度: ${#TOPOLOGY_ID}"
+          echo "NGC_ORG 长度: ${#NGC_ORG}"
+          echo "NGC_ORG 值: [${NGC_ORG}]"
+
           EXPIRE_TIME=$(date -u -d '+72 hours' '+%Y-%m-%dT%H:%M:%SZ')
           echo "设置 sleep 时间为: ${EXPIRE_TIME}"
+
+          FULL_URL="https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/?org=${NGC_ORG}"
+          echo "请求 URL: ${FULL_URL}"
 
           HTTP_CODE=$(curl -s -o /tmp/air_response.json -w "%{http_code}" \
             -X PATCH \
             -H "Authorization: Bearer ${AIR_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/?org=${NGC_ORG}" \
+            "${FULL_URL}" \
             -d "{\"sleep_at\": \"${EXPIRE_TIME}\"}")
 
           BODY=$(cat /tmp/air_response.json)
@@ -44,7 +53,6 @@ jobs:
             exit 1
           fi
 
-      # ── 成功通知 ──────────────────────────────────────────────
       - name: Telegram 续期成功通知
         if: success()
         env:
@@ -61,7 +69,6 @@ jobs:
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}&text=${TEXT}"
 
-      # ── 失败通知 ──────────────────────────────────────────────
       - name: Telegram 续期失败通知
         if: failure()
         env:
