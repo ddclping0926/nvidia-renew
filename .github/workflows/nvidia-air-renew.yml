@@ -27,7 +27,7 @@ jobs:
             -X PATCH \
             -H "Authorization: Bearer ${AIR_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            "https://dsx-air.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
+            "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
             -d "{\"sleep_at\": \"${EXPIRE_TIME}\"}")
 
           BODY=$(cat /tmp/air_response.json)
@@ -48,7 +48,7 @@ jobs:
               -X PATCH \
               -H "Authorization: Bearer ${AIR_API_TOKEN}" \
               -H "Content-Type: application/json" \
-              "https://dsx-air.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
+              "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
               -d "{\"expires_at\": \"${EXPIRE_TIME}\"}")
             BODY2=$(cat /tmp/air_response2.json)
             echo "备用请求 HTTP 状态码: ${HTTP_CODE2}"
