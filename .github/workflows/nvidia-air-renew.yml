@@ -15,6 +15,7 @@ jobs:
         env:
           AIR_API_TOKEN: ${{ secrets.AIR_API_TOKEN }}
           TOPOLOGY_ID: ${{ secrets.AIR_TOPOLOGY_ID }}
+          NGC_ORG: ${{ secrets.NGC_ORG_NAME }}
         run: |
           set +e
 
@@ -22,11 +23,11 @@ jobs:
           EXPIRE_TIME=$(date -u -d '+72 hours' '+%Y-%m-%dT%H:%M:%SZ')
           echo "设置 sleep 时间为: ${EXPIRE_TIME}"
 
-          # 使用 PATCH /api/v3/simulations/{id}/ 更新 sleep_at 字段
           HTTP_CODE=$(curl -s -o /tmp/air_response.json -w "%{http_code}" \
             -X PATCH \
             -H "Authorization: Bearer ${AIR_API_TOKEN}" \
             -H "Content-Type: application/json" \
+            -H "x-ngc-org-name: ${NGC_ORG}" \
             "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
             -d "{\"sleep_at\": \"${EXPIRE_TIME}\"}")
 
@@ -42,23 +43,7 @@ jobs:
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failure" >> "$GITHUB_OUTPUT"
-            # 尝试备用字段名 expires_at
-            echo "尝试备用字段 expires_at ..."
-            HTTP_CODE2=$(curl -s -o /tmp/air_response2.json -w "%{http_code}" \
-              -X PATCH \
-              -H "Authorization: Bearer ${AIR_API_TOKEN}" \
-              -H "Content-Type: application/json" \
-              "https://api.air-ngc.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
-              -d "{\"expires_at\": \"${EXPIRE_TIME}\"}")
-            BODY2=$(cat /tmp/air_response2.json)
-            echo "备用请求 HTTP 状态码: ${HTTP_CODE2}"
-            echo "备用响应: ${BODY2}"
-            echo "http_code=${HTTP_CODE2}" >> "$GITHUB_OUTPUT"
-            if [[ "$HTTP_CODE2" == "200" || "$HTTP_CODE2" == "201" ]]; then
-              echo "status=success" >> "$GITHUB_OUTPUT"
-            else
-              exit 1
-            fi
+            exit 1
           fi
 
       # ── 成功通知 ──────────────────────────────────────────────
