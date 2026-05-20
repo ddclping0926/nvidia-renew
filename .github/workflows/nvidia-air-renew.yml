@@ -17,51 +17,87 @@ jobs:
           TOPOLOGY_ID: ${{ secrets.AIR_TOPOLOGY_ID }}
           NGC_ORG: ${{ secrets.NGC_ORG_NAME }}
         run: |
-          pip install air-sdk --quiet
+          pip install "air-sdk>=1.0.0" --quiet
 
-          python3 << 'PYEOF'
-          import os
-          import sys
-          from datetime import datetime, timezone, timedelta
-          from air_sdk import AirApi
+          python3 - << 'PYEOF'
+import os, sys
+from datetime import datetime, timezone, timedelta
 
-          api_key    = os.environ["AIR_API_TOKEN"]
-          sim_id     = os.environ["TOPOLOGY_ID"]
-          org        = os.environ["NGC_ORG"]
-          expire     = datetime.now(timezone.utc) + timedelta(hours=72)
+api_key = os.environ["AIR_API_TOKEN"]
+sim_id  = os.environ["TOPOLOGY_ID"]
+org     = os.environ["NGC_ORG"]
+expire  = datetime.now(timezone.utc) + timedelta(hours=72)
 
-          try:
-              api = AirApi.with_api_key(api_key=api_key, org_name=org)
-              sim = api.simulations.get(sim_id)
-              sim.set_sleep_time(expire)
-              print(f"SUCCESS expire_time={expire.strftime('%Y-%m-%dT%H:%M:%SZ')}")
-              print(f"topology_id={sim_id}")
-          except Exception as e:
-              print(f"FAILED {e}", file=sys.stderr)
-              sys.exit(1)
-          PYEOF
+try:
+    from air_sdk import AirApi
+    # 新版 SDK
+    api = AirApi.with_api_key(api_key=api_key, org_name=org)
+except AttributeError:
+    try:
+        # 旧版 SDK（用户名=邮箱，密码=token）
+        from air_sdk import AirApi
+        api = AirApi(username="", password=api_key,
+                     api_url="https://api.air-ngc.nvidia.com")
+    except Exception as e:
+        print(f"FAILED init: {e}", file=sys.stderr)
+        sys.exit(1)
+except Exception as e:
+    print(f"FAILED init: {e}", file=sys.stderr)
+    sys.exit(1)
 
-          # 提取输出写入 GitHub Output
-          OUTPUT=$(python3 -c "
-          import os, sys
-          from datetime import datetime, timezone, timedelta
-          from air_sdk import AirApi
-          api_key = os.environ['AIR_API_TOKEN']
-          sim_id  = os.environ['TOPOLOGY_ID']
-          org     = os.environ['NGC_ORG']
-          expire  = datetime.now(timezone.utc) + timedelta(hours=72)
-          api = AirApi.with_api_key(api_key=api_key, org_name=org)
-          sim = api.simulations.get(sim_id)
-          sim.set_sleep_time(expire)
-          print(expire.strftime('%Y-%m-%dT%H:%M:%SZ'))
-          " 2>/dev/null)
+try:
+    sim = api.simulations.get(sim_id)
+    sim.set_sleep_time(expire)
+    expire_str = expire.strftime('%Y-%m-%dT%H:%M:%SZ')
+    print(f"expire_time={expire_str}")
+    print(f"topology_id={sim_id}")
+except AttributeError:
+    # set_sleep_time 不存在时用 update
+    try:
+        sim.update(sleep_at=expire)
+        expire_str = expire.strftime('%Y-%m-%dT%H:%M:%SZ')
+        print(f"expire_time={expire_str}")
+        print(f"topology_id={sim_id}")
+    except Exception as e:
+        print(f"FAILED update: {e}", file=sys.stderr)
+        sys.exit(1)
+except Exception as e:
+    print(f"FAILED: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+
+          # 捕获输出写入 GITHUB_OUTPUT
+          RESULT=$(python3 - << 'PYEOF2'
+import os, sys
+from datetime import datetime, timezone, timedelta
+
+api_key = os.environ["AIR_API_TOKEN"]
+sim_id  = os.environ["TOPOLOGY_ID"]
+org     = os.environ["NGC_ORG"]
+expire  = datetime.now(timezone.utc) + timedelta(hours=72)
+
+from air_sdk import AirApi
+try:
+    api = AirApi.with_api_key(api_key=api_key, org_name=org)
+except AttributeError:
+    api = AirApi(username="", password=api_key,
+                 api_url="https://api.air-ngc.nvidia.com")
+
+sim = api.simulations.get(sim_id)
+try:
+    sim.set_sleep_time(expire)
+except AttributeError:
+    sim.update(sleep_at=expire)
+
+print(expire.strftime('%Y-%m-%dT%H:%M:%SZ'))
+PYEOF2
+          )
 
           if [ $? -eq 0 ]; then
-            echo "expire_time=${OUTPUT}" >> "$GITHUB_OUTPUT"
+            echo "expire_time=${RESULT}" >> "$GITHUB_OUTPUT"
             echo "topology_id=${TOPOLOGY_ID}" >> "$GITHUB_OUTPUT"
-            echo "续期成功，sleep 时间延长至: ${OUTPUT}"
+            echo "续期成功，sleep 时间延长至: ${RESULT}"
           else
-            echo "续期失败"
             exit 1
           fi
 
@@ -77,7 +113,7 @@ jobs:
         run: |
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
-          TEXT="✅ NVIDIA Air 续期成功%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 执行时间: ${NOW}%0A⏱ Sleep 时间延长至: ${EXPIRE_TIME}%0A🔗 日志: ${RUN_URL}"
+          TEXT="✅ NVIDIA Air 续期成功%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 执行时间: ${NOW}%0A⏱ Sleep 延长至: ${EXPIRE_TIME}%0A🔗 日志: ${RUN_URL}"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}&text=${TEXT}"
 
@@ -92,6 +128,6 @@ jobs:
         run: |
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
-          TEXT="❌ NVIDIA Air 续期失败%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A🔗 日志: ${RUN_URL}%0A%0A⚠️ 请尽快手动续期，否则拓扑将进入 sleep 状态！"
+          TEXT="❌ NVIDIA Air 续期失败%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A🔗 日志: ${RUN_URL}%0A%0A⚠️ 请尽快手动续期！"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}&text=${TEXT}"
