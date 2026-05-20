@@ -2,55 +2,83 @@ name: NVIDIA Air Auto Renew
 
 on:
   schedule:
-    - cron: '0 */12 * * *'
-  workflow_dispatch:
+    - cron: '0 */12 * * *'   # 每12小时续期一次，远低于72小时上限
+  workflow_dispatch:           # 允许手动触发
 
 jobs:
   renew-topology:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Renew NVIDIA Air Topology
+      - name: Renew NVIDIA Air Topology (延长 sleep 时间72小时)
         id: renew
         env:
           AIR_API_TOKEN: ${{ secrets.AIR_API_TOKEN }}
           TOPOLOGY_ID: ${{ secrets.AIR_TOPOLOGY_ID }}
         run: |
           set +e
+
+          # 计算72小时后的时间（ISO 8601格式）
+          EXPIRE_TIME=$(date -u -d '+72 hours' '+%Y-%m-%dT%H:%M:%SZ')
+          echo "设置 sleep 时间为: ${EXPIRE_TIME}"
+
+          # 使用 PATCH /api/v3/simulations/{id}/ 更新 sleep_at 字段
           HTTP_CODE=$(curl -s -o /tmp/air_response.json -w "%{http_code}" \
-            -X POST \
+            -X PATCH \
             -H "Authorization: Bearer ${AIR_API_TOKEN}" \
             -H "Content-Type: application/json" \
-            "https://dsx-air.nvidia.com/api/v1/simulation/${TOPOLOGY_ID}/control/" \
-            -d '{"action": "renew"}')
+            "https://dsx-air.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
+            -d "{\"sleep_at\": \"${EXPIRE_TIME}\"}")
 
           BODY=$(cat /tmp/air_response.json)
+          echo "HTTP 状态码: ${HTTP_CODE}"
+          echo "响应: ${BODY}"
+
           echo "http_code=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
-          echo "body=${BODY}" >> "$GITHUB_OUTPUT"
+          echo "expire_time=${EXPIRE_TIME}" >> "$GITHUB_OUTPUT"
           echo "topology_id=${TOPOLOGY_ID}" >> "$GITHUB_OUTPUT"
 
           if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "201" ]]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failure" >> "$GITHUB_OUTPUT"
-            exit 1
+            # 尝试备用字段名 expires_at
+            echo "尝试备用字段 expires_at ..."
+            HTTP_CODE2=$(curl -s -o /tmp/air_response2.json -w "%{http_code}" \
+              -X PATCH \
+              -H "Authorization: Bearer ${AIR_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "https://dsx-air.nvidia.com/api/v3/simulations/${TOPOLOGY_ID}/" \
+              -d "{\"expires_at\": \"${EXPIRE_TIME}\"}")
+            BODY2=$(cat /tmp/air_response2.json)
+            echo "备用请求 HTTP 状态码: ${HTTP_CODE2}"
+            echo "备用响应: ${BODY2}"
+            echo "http_code=${HTTP_CODE2}" >> "$GITHUB_OUTPUT"
+            if [[ "$HTTP_CODE2" == "200" || "$HTTP_CODE2" == "201" ]]; then
+              echo "status=success" >> "$GITHUB_OUTPUT"
+            else
+              exit 1
+            fi
           fi
 
+      # ── 成功通知 ──────────────────────────────────────────────
       - name: Telegram 续期成功通知
         if: success()
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TOPOLOGY_ID: ${{ steps.renew.outputs.topology_id }}
+          EXPIRE_TIME: ${{ steps.renew.outputs.expire_time }}
           RUN_ID: ${{ github.run_id }}
           REPO: ${{ github.repository }}
         run: |
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
-          TEXT="✅ NVIDIA Air 续期成功%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A⏱ 有效期延长至 72 小时后%0A🔗 日志: ${RUN_URL}"
+          TEXT="✅ NVIDIA Air 续期成功%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 执行时间: ${NOW}%0A⏱ Sleep 时间延长至: ${EXPIRE_TIME}%0A🔗 日志: ${RUN_URL}"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}&text=${TEXT}"
 
+      # ── 失败通知 ──────────────────────────────────────────────
       - name: Telegram 续期失败通知
         if: failure()
         env:
@@ -63,6 +91,6 @@ jobs:
         run: |
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
           RUN_URL="https://github.com/${REPO}/actions/runs/${RUN_ID}"
-          TEXT="❌ NVIDIA Air 续期失败%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A📛 HTTP 状态码: ${HTTP_CODE}%0A🔗 日志: ${RUN_URL}%0A%0A⚠️ 请尽快手动续期！"
+          TEXT="❌ NVIDIA Air 续期失败%0A%0A🖥 拓扑 ID: ${TOPOLOGY_ID}%0A🕐 时间: ${NOW}%0A📛 HTTP 状态码: ${HTTP_CODE}%0A🔗 日志: ${RUN_URL}%0A%0A⚠️ 请尽快手动续期，否则拓扑将进入 sleep 状态！"
           curl -s -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TG_CHAT_ID}&text=${TEXT}"
