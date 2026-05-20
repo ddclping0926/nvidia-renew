@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Renew NVIDIA Air Topology (延长 sleep 时间72小时)
+      - name: Renew NVIDIA Air Topology
         id: renew
         env:
           AIR_API_TOKEN: ${{ secrets.AIR_API_TOKEN }}
@@ -19,64 +19,16 @@ jobs:
         run: |
           pip install "air-sdk>=1.0.0" --quiet
 
-          python3 - << 'PYEOF'
+          cat > /tmp/renew.py << 'EOF'
 import os, sys
 from datetime import datetime, timezone, timedelta
-
-api_key = os.environ["AIR_API_TOKEN"]
-sim_id  = os.environ["TOPOLOGY_ID"]
-org     = os.environ["NGC_ORG"]
-expire  = datetime.now(timezone.utc) + timedelta(hours=72)
-
-try:
-    from air_sdk import AirApi
-    # 新版 SDK
-    api = AirApi.with_api_key(api_key=api_key, org_name=org)
-except AttributeError:
-    try:
-        # 旧版 SDK（用户名=邮箱，密码=token）
-        from air_sdk import AirApi
-        api = AirApi(username="", password=api_key,
-                     api_url="https://api.air-ngc.nvidia.com")
-    except Exception as e:
-        print(f"FAILED init: {e}", file=sys.stderr)
-        sys.exit(1)
-except Exception as e:
-    print(f"FAILED init: {e}", file=sys.stderr)
-    sys.exit(1)
-
-try:
-    sim = api.simulations.get(sim_id)
-    sim.set_sleep_time(expire)
-    expire_str = expire.strftime('%Y-%m-%dT%H:%M:%SZ')
-    print(f"expire_time={expire_str}")
-    print(f"topology_id={sim_id}")
-except AttributeError:
-    # set_sleep_time 不存在时用 update
-    try:
-        sim.update(sleep_at=expire)
-        expire_str = expire.strftime('%Y-%m-%dT%H:%M:%SZ')
-        print(f"expire_time={expire_str}")
-        print(f"topology_id={sim_id}")
-    except Exception as e:
-        print(f"FAILED update: {e}", file=sys.stderr)
-        sys.exit(1)
-except Exception as e:
-    print(f"FAILED: {e}", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-
-          # 捕获输出写入 GITHUB_OUTPUT
-          RESULT=$(python3 - << 'PYEOF2'
-import os, sys
-from datetime import datetime, timezone, timedelta
-
-api_key = os.environ["AIR_API_TOKEN"]
-sim_id  = os.environ["TOPOLOGY_ID"]
-org     = os.environ["NGC_ORG"]
-expire  = datetime.now(timezone.utc) + timedelta(hours=72)
-
 from air_sdk import AirApi
+
+api_key = os.environ["AIR_API_TOKEN"]
+sim_id  = os.environ["TOPOLOGY_ID"]
+org     = os.environ["NGC_ORG"]
+expire  = datetime.now(timezone.utc) + timedelta(hours=72)
+
 try:
     api = AirApi.with_api_key(api_key=api_key, org_name=org)
 except AttributeError:
@@ -90,13 +42,15 @@ except AttributeError:
     sim.update(sleep_at=expire)
 
 print(expire.strftime('%Y-%m-%dT%H:%M:%SZ'))
-PYEOF2
-          )
+EOF
 
-          if [ $? -eq 0 ]; then
+          RESULT=$(python3 /tmp/renew.py 2>&1)
+          EXIT_CODE=$?
+          echo "Python output: ${RESULT}"
+
+          if [ $EXIT_CODE -eq 0 ]; then
             echo "expire_time=${RESULT}" >> "$GITHUB_OUTPUT"
             echo "topology_id=${TOPOLOGY_ID}" >> "$GITHUB_OUTPUT"
-            echo "续期成功，sleep 时间延长至: ${RESULT}"
           else
             exit 1
           fi
